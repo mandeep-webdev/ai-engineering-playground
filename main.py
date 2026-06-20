@@ -1,8 +1,9 @@
 import os # access env variables
+import json
 from dotenv import load_dotenv #load variable from .env file
 from fastapi import FastAPI,HTTPException # error handling
 from google import genai # Gemini SDK lets to talk to Gemini api
-from pydantic import BaseModel,field_validator
+from pydantic import BaseModel,field_validator,ValidationError
 
 load_dotenv() #read .env file
 
@@ -25,6 +26,44 @@ class Request(BaseModel):
 
 class Response(BaseModel):
     answer : str
+
+class UserProfile(BaseModel):
+    name : str
+    experience_years : int
+    skills : list[str]
+
+@app.post("/extract-profile", response_model=UserProfile)
+def extract_profile(text:str):
+    prompt = f"""
+Extract the following information from the text.
+Return ONLY valid JSON.
+Do not incluce Markdown code fences.
+
+Required Fields:
+    name (string)
+    experience_years (Integer)
+    skills (array of strings)
+Text: 
+{text}
+"""
+    
+    response = client.models.generate_content(
+    model="gemini-2.5-flash",
+    contents=prompt)
+    try: 
+        data = json.loads(response.text) # convert json string to python object
+        return UserProfile(**data)
+    except json.JSONDecodeError: #ai doesnot return json string
+        raise HTTPException(
+            status_code=500,
+            detail="AI returned invalid JSON"
+        )
+    except ValidationError: #raise when failed to pydantic model mismatch data types or miising keys
+        raise HTTPException(
+            status_code=500,
+            detail="AI returned invalid data format"
+        )
+
 
 @app.post("/ask", response_model=Response)
 def ask_ai(req:Request):
