@@ -3,7 +3,7 @@ import json
 from dotenv import load_dotenv #load variable from .env file
 from fastapi import FastAPI,HTTPException # error handling
 from google import genai # Gemini SDK lets to talk to Gemini api
-from pydantic import BaseModel,field_validator,ValidationError
+from pydantic import BaseModel,field_validator,ValidationError,StrictInt,StrictStr
 
 load_dotenv() #read .env file
 
@@ -28,9 +28,31 @@ class Response(BaseModel):
     answer : str
 
 class UserProfile(BaseModel):
-    name : str
-    experience_years : int
-    skills : list[str]
+    name : StrictStr
+    experience_years : StrictInt
+    skills : list[StrictStr]
+
+#Learning Function/Tool Calling
+class TaskRequest(BaseModel):
+    text : str
+
+class CreateTaskArgs(BaseModel):
+    title : str
+    completed : bool
+
+class ToolCall(BaseModel):
+    tool : StrictStr
+    arguments : CreateTaskArgs
+
+
+tasks = []
+def create_task(title:str,completed:bool):
+    task = {
+        "title" : title,
+        "completed" : completed
+    }
+    tasks.append(task)
+    return task
 
 @app.post("/extract-profile", response_model=UserProfile)
 def extract_profile(text:str):
@@ -53,6 +75,56 @@ Text:
     try: 
         data = json.loads(response.text) # convert json string to python object
         return UserProfile(**data)
+    except json.JSONDecodeError: #ai doesnot return json string
+        raise HTTPException(
+            status_code=500,
+            detail="AI returned invalid JSON"
+        )
+    except ValidationError: #raise when failed to pydantic model mismatch data types or miising keys
+        raise HTTPException(
+            status_code=500,
+            detail="AI returned invalid data format"
+        )
+
+@app.post("/create-task-ai")
+def create_task_ai(req:TaskRequest):
+    prompt = f"""
+    You are a task assistant.
+
+    Decide whether the user wants to create a task.
+
+    Return only valid JSON.
+    Donot include Markdown code fences
+
+    Required Format:
+
+    {{
+    "tool": create_task,
+    "arguments" : {{
+        "title": string,
+        "completed" : boolean
+    }}
+    }}
+
+    user input: 
+    {req.text}
+
+
+
+    """
+    response = client.models.generate_content(
+    model="gemini-2.5-flash",
+    contents=prompt
+    )
+    # print(response.text)
+    try:
+        data = json.loads(response.text)
+        tool_call = ToolCall(**data)
+        if tool_call.tool == "create_task":
+            return create_task(
+            title = tool_call.arguments.title,
+            completed=tool_call.arguments.completed
+        )
     except json.JSONDecodeError: #ai doesnot return json string
         raise HTTPException(
             status_code=500,
