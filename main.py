@@ -25,6 +25,28 @@ class TaskRequest(BaseModel):
 tasks = []
 task_id_counter = 1
 
+#structured output
+class Product(BaseModel):
+    name : str
+    price : int
+    storeage : str
+    color : str
+
+class ProductRequest(BaseModel):
+    text :str
+
+@app.post("/structured-output")
+def structured_output(req : ProductRequest):
+    response = client.models.generate_content(
+    model="gemini-2.5-flash",
+    contents=req.text,
+    config=types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema=Product
+    )
+)
+    product = response.parsed
+    return product
 # create tool declaration
 # i am describing my tools here
 create_task_function = types.FunctionDeclaration(
