@@ -14,9 +14,13 @@ from langchain_community.document_loaders import TextLoader
 from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_ollama import OllamaEmbeddings,ChatOllama
-from langchain_core.prompts import PromptTemplate
+from langchain_core.prompts import ChatPromptTemplate,MessagesPlaceholder
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
+from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.chat_history import InMemoryChatMessageHistory
+
+
 # import faiss
 # import numpy as np
 
@@ -457,8 +461,10 @@ from langchain_core.output_parsers import StrOutputParser
 # # # print(knowledge_basee[14]["text"])
 # # print(knowledge_basee[24]["text"])
 
+#------------------------------------------------------------------------------
+# LCEL Implementation + Chat History
 
-# LCEL
+
 loader = TextLoader("react_docs.txt",encoding="utf-8")
 documents = loader.load() #[Document]
 splitter = RecursiveCharacterTextSplitter(chunk_size = 500,chunk_overlap = 100)
@@ -470,38 +476,56 @@ embedding_model = OllamaEmbeddings(
 vector_store = FAISS.from_documents(chunks,embedding_model)
 retriever = vector_store.as_retriever()
 
-question = "what is state management"
+question = "who create it?"
 def format_docs(docs):
     context = [doc.page_content for doc in docs]
     context = "\n\n".join(context)
     return context
 formatter = RunnableLambda(format_docs)
 
-
-
-prompt_template = PromptTemplate(
-    template="""
-You are a React expert.
-
-Use the following context to answer the question.
-
-Context:
-{context}
-
-Question:
-{question}
-Answer:
-
-""", input_variables=["context","question"]
-)
+def extract_question(data):
+    return data["question"]
+get_question = RunnableLambda(extract_question)
+#return List[Message Object]
+prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system" , "You are a React expert Use only the following context to answer the question. Context:{context}"),
+        MessagesPlaceholder(variable_name="chat_history",optional=True),
+        ("human" , "{question}")
+    ])
 
 llm = ChatOllama(
     model="llama3:latest"
 )
-chain = {
-    "context" : retriever | formatter,
-    "question" : RunnablePassthrough()
-} | prompt_template | llm | StrOutputParser()
+# chain = {
+#     "context" : get_question | retriever | formatter,
+#     "question" : get_question
+# } | prompt | llm | StrOutputParser()
+debug_chain = {
+    "context": get_question | retriever | formatter,
+    "question": get_question,
+} | RunnableLambda(lambda x: print(x) or x) | prompt | llm | StrOutputParser()
+store = {}
+#history loader function
+def get_session_history(session_id : str):
+    if session_id not in store :
+        store[session_id] = InMemoryChatMessageHistory()
+    return store[session_id]
+    
+chain_with_history = RunnableWithMessageHistory(
+    debug_chain,
+    get_session_history,
+    input_messages_key="question",
+    history_messages_key="chat_history"
+)
 
-response = chain.invoke(question)
+response = chain_with_history.invoke({"question" : question},
+                                     config={
+                                         "configurable":{
+                                             "session_id" : "ai-123"
+                                         }
+                                     })
+print(store)
 print(response)
+
+
