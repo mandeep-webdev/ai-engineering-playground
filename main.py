@@ -476,7 +476,7 @@ embedding_model = OllamaEmbeddings(
 vector_store = FAISS.from_documents(chunks,embedding_model)
 retriever = vector_store.as_retriever()
 
-question = "who create it?"
+
 def format_docs(docs):
     context = [doc.page_content for doc in docs]
     context = "\n\n".join(context)
@@ -497,14 +497,14 @@ prompt = ChatPromptTemplate.from_messages(
 llm = ChatOllama(
     model="llama3:latest"
 )
-# chain = {
-#     "context" : get_question | retriever | formatter,
-#     "question" : get_question
-# } | prompt | llm | StrOutputParser()
-debug_chain = {
-    "context": get_question | retriever | formatter,
-    "question": get_question,
-} | RunnableLambda(lambda x: print(x) or x) | prompt | llm | StrOutputParser()
+chain = {
+    "context" : get_question | retriever | formatter,
+    "question" : get_question
+} | prompt | llm | StrOutputParser()
+# debug_chain = {
+#     "context": get_question | retriever | formatter,
+#     "question": get_question,
+# } | RunnableLambda(lambda x: print(x) or x) | prompt | llm | StrOutputParser()
 store = {}
 #history loader function
 def get_session_history(session_id : str):
@@ -513,19 +513,23 @@ def get_session_history(session_id : str):
     return store[session_id]
     
 chain_with_history = RunnableWithMessageHistory(
-    debug_chain,
+    chain,
     get_session_history,
     input_messages_key="question",
     history_messages_key="chat_history"
 )
 
-response = chain_with_history.invoke({"question" : question},
+while True:
+    question = input("You: ")
+    if question == "exit":
+        break
+    else: 
+        response = chain_with_history.invoke({"question" : question},
                                      config={
                                          "configurable":{
                                              "session_id" : "ai-123"
                                          }
                                      })
-print(store)
-print(response)
+        print("AI:", response)
 
 
