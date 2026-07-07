@@ -13,13 +13,17 @@
 from langchain_community.document_loaders import TextLoader
 from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_ollama import OllamaEmbeddings,ChatOllama
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.prompts import ChatPromptTemplate,MessagesPlaceholder
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.chat_history import InMemoryChatMessageHistory
-
+from langchain_core.tools import tool
+from langchain_groq import ChatGroq
+from langchain_core.messages import ToolMessage,HumanMessage
+from dotenv import load_dotenv
+load_dotenv()
 
 # import faiss
 # import numpy as np
@@ -470,8 +474,8 @@ documents = loader.load() #[Document]
 splitter = RecursiveCharacterTextSplitter(chunk_size = 500,chunk_overlap = 100)
 chunks = splitter.split_documents(documents=documents) #[Document]
 
-embedding_model = OllamaEmbeddings(
-    model="nomic-embed-text"
+embedding_model = HuggingFaceEmbeddings(
+    model_name="BAAI/bge-small-en-v1.5"
 )
 vector_store = FAISS.from_documents(chunks,embedding_model)
 retriever = vector_store.as_retriever()
@@ -494,8 +498,8 @@ prompt = ChatPromptTemplate.from_messages(
         ("human" , "{question}")
     ])
 
-llm = ChatOllama(
-    model="llama3:latest"
+llm = ChatGroq(
+    model="llama-3.3-70b-versatile"  
 )
 chain = {
     "context" : get_question | retriever | formatter,
@@ -507,29 +511,64 @@ chain = {
 # } | RunnableLambda(lambda x: print(x) or x) | prompt | llm | StrOutputParser()
 store = {}
 #history loader function
-def get_session_history(session_id : str):
-    if session_id not in store :
-        store[session_id] = InMemoryChatMessageHistory()
-    return store[session_id]
+# def get_session_history(session_id : str):
+#     if session_id not in store :
+#         store[session_id] = InMemoryChatMessageHistory()
+#     return store[session_id]
     
-chain_with_history = RunnableWithMessageHistory(
-    chain,
-    get_session_history,
-    input_messages_key="question",
-    history_messages_key="chat_history"
+# chain_with_history = RunnableWithMessageHistory(
+#     chain,
+#     get_session_history,
+#     input_messages_key="question",
+#     history_messages_key="chat_history"
+# )
+
+# while True:
+#     question = input("You: ")
+#     if question == "exit":
+#         break
+#     else: 
+#         response = chain_with_history.invoke({"question" : question},
+#                                      config={
+#                                          "configurable":{
+#                                              "session_id" : "ai-123"
+#                                          }
+#                                      })
+#         print("AI:", response)
+
+
+#------------------AI Agent------------
+
+#multiply is a tool object not a func now
+@tool
+def multiply(a:int,b:int):
+    """
+    multiply two numbers.
+    """
+    return a*b
+
+llm_with_tools = llm.bind_tools([multiply])
+response = llm_with_tools.invoke(
+    "What is 25 × 40?"
 )
-
-while True:
-    question = input("You: ")
-    if question == "exit":
-        break
-    else: 
-        response = chain_with_history.invoke({"question" : question},
-                                     config={
-                                         "configurable":{
-                                             "session_id" : "ai-123"
-                                         }
-                                     })
-        print("AI:", response)
-
-
+#[
+# {
+# 'name': 'multiply', 
+# 'args': {'a': 25, 'b': 40}, 
+# 'id': 'pn0p6yh6g', 
+# 'type': 'tool_call'
+# }
+#]
+t = response.tool_calls[0]
+result = multiply.invoke(t["args"])
+tool_msg = ToolMessage(
+    content=str(result),
+    tool_call_id = t["id"]
+    )
+messages = [
+    HumanMessage(content="What is 25 × 40?"),
+    response,
+    tool_msg
+]
+final_response = llm_with_tools.invoke(messages)
+print(final_response.content)
