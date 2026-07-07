@@ -22,6 +22,7 @@ from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.tools import tool
 from langchain_groq import ChatGroq
 from langchain_core.messages import ToolMessage,HumanMessage
+from langchain.agents import create_agent
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -469,42 +470,42 @@ load_dotenv()
 # LCEL Implementation + Chat History
 
 
-loader = TextLoader("react_docs.txt",encoding="utf-8")
-documents = loader.load() #[Document]
-splitter = RecursiveCharacterTextSplitter(chunk_size = 500,chunk_overlap = 100)
-chunks = splitter.split_documents(documents=documents) #[Document]
+# loader = TextLoader("react_docs.txt",encoding="utf-8")
+# documents = loader.load() #[Document]
+# splitter = RecursiveCharacterTextSplitter(chunk_size = 500,chunk_overlap = 100)
+# chunks = splitter.split_documents(documents=documents) #[Document]
 
-embedding_model = HuggingFaceEmbeddings(
-    model_name="BAAI/bge-small-en-v1.5"
-)
-vector_store = FAISS.from_documents(chunks,embedding_model)
-retriever = vector_store.as_retriever()
+# embedding_model = HuggingFaceEmbeddings(
+#     model_name="BAAI/bge-small-en-v1.5"
+# )
+# vector_store = FAISS.from_documents(chunks,embedding_model)
+# retriever = vector_store.as_retriever()
 
 
-def format_docs(docs):
-    context = [doc.page_content for doc in docs]
-    context = "\n\n".join(context)
-    return context
-formatter = RunnableLambda(format_docs)
+# def format_docs(docs):
+#     context = [doc.page_content for doc in docs]
+#     context = "\n\n".join(context)
+#     return context
+# formatter = RunnableLambda(format_docs)
 
-def extract_question(data):
-    return data["question"]
-get_question = RunnableLambda(extract_question)
-#return List[Message Object]
-prompt = ChatPromptTemplate.from_messages(
-    [
-        ("system" , "You are a React expert Use only the following context to answer the question. Context:{context}"),
-        MessagesPlaceholder(variable_name="chat_history",optional=True),
-        ("human" , "{question}")
-    ])
+# def extract_question(data):
+#     return data["question"]
+# get_question = RunnableLambda(extract_question)
+# #return List[Message Object]
+# prompt = ChatPromptTemplate.from_messages(
+#     [
+#         ("system" , "You are a React expert Use only the following context to answer the question. Context:{context}"),
+#         MessagesPlaceholder(variable_name="chat_history",optional=True),
+#         ("human" , "{question}")
+#     ])
 
 llm = ChatGroq(
     model="llama-3.3-70b-versatile"  
 )
-chain = {
-    "context" : get_question | retriever | formatter,
-    "question" : get_question
-} | prompt | llm | StrOutputParser()
+# chain = {
+#     "context" : get_question | retriever | formatter,
+#     "question" : get_question
+# } | prompt | llm | StrOutputParser()
 # debug_chain = {
 #     "context": get_question | retriever | formatter,
 #     "question": get_question,
@@ -547,10 +548,24 @@ def multiply(a:int,b:int):
     """
     return a*b
 
-llm_with_tools = llm.bind_tools([multiply])
-response = llm_with_tools.invoke(
-    "What is 25 × 40?"
+agent = create_agent(
+    model=llm,
+    tools=[multiply]
 )
+# llm_with_tools = llm.bind_tools([multiply])
+#print(type(agent))
+response = agent.invoke(
+   {
+       "messages" : [
+           {
+               "role" : "user",
+               "content" : "What is 25 * 40?"
+               
+           }
+       ]
+   }
+)
+print(response)
 #[
 # {
 # 'name': 'multiply', 
@@ -559,16 +574,16 @@ response = llm_with_tools.invoke(
 # 'type': 'tool_call'
 # }
 #]
-t = response.tool_calls[0]
-result = multiply.invoke(t["args"])
-tool_msg = ToolMessage(
-    content=str(result),
-    tool_call_id = t["id"]
-    )
-messages = [
-    HumanMessage(content="What is 25 × 40?"),
-    response,
-    tool_msg
-]
-final_response = llm_with_tools.invoke(messages)
-print(final_response.content)
+# t = response.tool_calls[0]
+# result = multiply.invoke(t["args"])
+# tool_msg = ToolMessage(
+#     content=str(result),
+#     tool_call_id = t["id"]
+#     )
+# messages = [
+#     HumanMessage(content="What is 25 × 40?"),
+#     response,
+#     tool_msg
+# ]
+# final_response = llm_with_tools.invoke(messages)
+# print(final_response.content)
