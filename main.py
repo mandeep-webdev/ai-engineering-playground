@@ -550,7 +550,16 @@ def multiply(a:int,b:int):
 
 agent = create_agent(
     model=llm,
-    tools=[multiply]
+    tools=[multiply],
+    system_prompt="""
+    You are a helpful math tutor.
+
+    Always explain the calculation step by step.
+
+    Use the multiply tool whenever multiplication is needed.
+
+    Never perform multiplication mentally.
+    """
 )
 # llm_with_tools = llm.bind_tools([multiply])
 #print(type(agent))
