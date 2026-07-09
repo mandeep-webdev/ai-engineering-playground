@@ -21,8 +21,13 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.tools import tool
 from langchain_groq import ChatGroq
-from langchain_core.messages import ToolMessage,HumanMessage
+from langchain_core.messages import ToolMessage,HumanMessage,BaseMessage
 from langchain.agents import create_agent
+from langgraph.graph import StateGraph,START,END
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode
+from typing import Annotated
+from typing_extensions import TypedDict
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -548,33 +553,34 @@ def multiply(a:int,b:int):
     """
     return a*b
 
-agent = create_agent(
-    model=llm,
-    tools=[multiply],
-    system_prompt="""
-    You are a helpful math tutor.
+tools=[multiply]
+# agent = create_agent(
+#     model=llm,
+#     tools=tools,
+#     system_prompt="""
+#     You are a helpful math tutor.
 
-    Always explain the calculation step by step.
+#     Always explain the calculation step by step.
 
-    Use the multiply tool whenever multiplication is needed.
+#     Use the multiply tool whenever multiplication is needed.
 
-    Never perform multiplication mentally.
-    """
-)
-# llm_with_tools = llm.bind_tools([multiply])
+#     Never perform multiplication mentally.
+#     """
+# )
+llm_with_tools = llm.bind_tools([multiply])
 #print(type(agent))
-response = agent.invoke(
-   {
-       "messages" : [
-           {
-               "role" : "user",
-               "content" : "What is 25 * 40?"
+# response = agent.invoke(
+#    {
+#        "messages" : [
+#            {
+#                "role" : "user",
+#                "content" : "What is 25 * 40?"
                
-           }
-       ]
-   }
-)
-print(response)
+#            }
+#        ]
+#    }
+# )
+# print(response)
 #[
 # {
 # 'name': 'multiply', 
@@ -596,3 +602,39 @@ print(response)
 # ]
 # final_response = llm_with_tools.invoke(messages)
 # print(final_response.content)
+
+
+#----------------------LangGraph-------------
+class State(TypedDict):
+    messages:Annotated[list[BaseMessage],add_messages]
+
+#empty workflow
+builder = StateGraph(State)
+
+#Node
+def chatbot_node(state:State):
+    response = llm_with_tools.invoke(state["messages"])
+    return {
+        "messages" : [response]
+    }
+builder.add_node("chatbot",chatbot_node)
+builder.add_node("tools",ToolNode(tools))
+builder.add_edge(START,"chatbot")
+
+#routing conditional edge
+def should_continue(state:State):
+    last_msg = state["messages"][-1]
+
+    if last_msg.tool_calls:
+        return "tools"
+    
+    return END
+builder.add_conditional_edges("chatbot",should_continue)
+# loop
+builder.add_edge("tools","chatbot")
+graph = builder.compile()
+graph.invoke({
+    "messages" : [
+        HumanMessage("What is 34*23?")
+    ]
+})
