@@ -10,6 +10,7 @@
 # import math
 # import ollama
 # from sklearn.metrics.pairwise import cosine_similarity
+from typing import Literal
 from langchain_community.document_loaders import TextLoader
 from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -21,7 +22,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.tools import tool
 from langchain_groq import ChatGroq
-from langchain_core.messages import ToolMessage,HumanMessage,BaseMessage
+from langchain_core.messages import ToolMessage,HumanMessage,BaseMessage,SystemMessage
 from langchain.agents import create_agent
 from langgraph.graph import StateGraph,START,END
 from langgraph.graph.message import add_messages
@@ -30,7 +31,9 @@ from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
 from typing import Annotated
 from typing_extensions import TypedDict
+from langchain.chat_models import init_chat_model
 from dotenv import load_dotenv
+from pydantic import BaseModel
 load_dotenv()
 
 # import faiss
@@ -681,33 +684,280 @@ llm_with_tools = llm.bind_tools(tools)
 
 #---------------------interrupts------------
 
+# class State(TypedDict):
+#     pass
+
+# def approval_node(state:State):
+#     approval = interrupt("Do you approve?")
+#     print(f"Approval: {approval}")
+#     return {}
+
+# builder = StateGraph(State)
+# builder.add_node("approval",approval_node)
+# builder.add_edge(START,"approval")
+# builder.add_edge("approval",END)
+# memory = MemorySaver()
+# config = {
+#     "configurable" : {
+#         "thread_id" : "thread-1"
+#     }
+# }
+# graph = builder.compile(
+#     checkpointer=memory
+# )
+# res = graph.invoke(
+#     {},
+#     config=config
+# )
+# print(res)
+# graph.invoke(
+#     Command(resume=True),
+#     config=config
+# )
+
+
+
+#---------------------Parallel Execution--------
+# class State(TypedDict):
+#      flight : str
+#      hotel : str
+#      weather : str
+
+# def planner(state:State):
+#     print("Planning trip...")
+#     return {}
+
+# def search_flights(state:State):
+#     print("Searching flights...")
+#     return {
+#         "flight": "Flight AI-204"
+#     }
+
+# def search_hotels(state: State):
+#     print("Searching hotels...")
+#     return {
+#         "hotel": "Hilton Tokyo"
+#     }
+
+# def search_weather(state: State):
+#     print("Searching weather...")
+#     return {
+#         "weather": "Sunny, 25°C"
+#     }
+
+# def summary(state: State):
+#     print(state)
+#     return {}
+
+# builder = StateGraph(State)
+
+# builder.add_node("planner", planner)
+# builder.add_node("flight", search_flights)
+# builder.add_node("hotel", search_hotels)
+# builder.add_node("weather", search_weather)
+# builder.add_node("summary", summary)
+
+# builder.add_edge(START, "planner")
+# #Fork
+# builder.add_edge("planner", "flight")
+# builder.add_edge("planner", "hotel")
+# builder.add_edge("planner", "weather")
+
+# #join
+# builder.add_edge("flight", "summary")
+# builder.add_edge("hotel", "summary")
+# builder.add_edge("weather", "summary")
+# builder.add_edge("summary", END)
+
+
+#------------------multi-agent------------------
+
+class Review(BaseModel):
+    status : Literal['approved','needs_revision']
+    feedback :str
+
+reviewer_llm = llm.with_structured_output(Review)
+
+
+#Shared State
 class State(TypedDict):
-    pass
+     user_request:str
+     research_content:str
+     blog_content:str
+     review:Review | None
+    
+def review_router(state: State):
+    print("\n Checking review decision")
 
-def approval_node(state:State):
-    approval = interrupt("Do you approve?")
-    print(f"Approval: {approval}")
-    return {}
+    if state["review"].status == "approved":
+        print("Review approved")
+        return END
+    
+    print("Revision required")
+    return "rewriter"
+#Research Agent
+def research_agent(state:State):
+    print("\n Research Agent running")
+    query = state["user_request"]
+    messages = [
+        SystemMessage(content= """
+            You are a research agent.
 
-builder = StateGraph(State)
-builder.add_node("approval",approval_node)
-builder.add_edge(START,"approval")
-builder.add_edge("approval",END)
-memory = MemorySaver()
-config = {
-    "configurable" : {
-        "thread_id" : "thread-1"
+            Your only job is to research the topic.
+
+            Do not write the final article.
+
+            Provide factual, structured research that another agent can use.
+            
+            """),
+        HumanMessage(content=query)
+    ]
+
+    res = llm.invoke(messages)
+    research = res.content
+    print("Research completed")
+    return {
+        "research_content" : research
     }
+
+# Writer Agent
+def writer_agent(state:State):
+    print("\n Writer Agent running")
+    query = state["user_request"]
+    research = state["research_content"]
+    messages = [
+        SystemMessage(
+            content= """
+            You are an expert technical writer.
+
+            Your responsibility is to write a well-structured,
+            engaging blog using ONLY the research provided.
+
+            Do not invent facts.
+            Do not perform additional research.
+            
+        """
+        ),
+        HumanMessage(
+            content=f"""
+        User Request:
+        {query}
+
+        Research:
+        {research}
+
+        """
+        )
+    ]
+    blog = llm.invoke(messages).content
+    print("Blog created")
+    return {
+        "blog_content" : blog
+    }
+
+# Reviewer Agent
+def reviewer_agent(state:State):
+    print("\n Reviewer Agent running")
+    query = state["user_request"]
+    blog = state['blog_content']
+    messages = [
+        SystemMessage(
+                        content= """You are a professional technical reviewer.
+
+            Your only responsibility is to review the blog article against the user's original request.
+
+            Evaluate whether the article:
+            - satisfies the user's request,
+            - is clear and well structured,
+            - is technically accurate,
+            - is complete.
+
+            Do not rewrite or improve the article.
+
+            If the article meets the user's request, return the status as "approved".
+
+            Otherwise, return the status as "needs_revision" and provide clear, actionable feedback describing what should be improved."""
+        ),
+        HumanMessage(
+            content=f"""User Request:
+            {query}
+
+            Blog:
+            {blog}"""
+        )
+    ]
+    #review Obj not a dict
+    review = reviewer_llm.invoke(messages)
+    print(f"Review completed: {review.status}")
+    return {
+        "review" : review
+    }
+def rewriter_agent(state:State):
+    print("\n Rewriter Agent running")
+    query = state["user_request"]
+    research = state['research_content']
+    existing_blog = state["blog_content"]
+    feedback = state["review"].feedback
+    messages = [
+        SystemMessage(
+            content="""You are an expert technical editor.
+
+    Revise the existing article using the reviewer feedback.
+
+    Keep factual accuracy.
+
+    Do not invent information.
+
+    Use only the provided research."""
+        ),
+        HumanMessage(
+            content=f"""Original Request:
+    {query}
+
+    Research:
+    {research}
+
+    Current Draft:
+    {existing_blog}
+
+    Reviewer Feedback:
+    {feedback}
+    """
+        )
+    ]
+    revised_blog = llm.invoke(messages).content
+    print("Blog rewritten")
+    return {
+        "blog_content" : revised_blog
+    }
+builder = StateGraph(State)
+builder.add_node("research",research_agent)
+builder.add_node("writer",writer_agent)
+builder.add_node("reviewer",reviewer_agent)
+builder.add_node("rewriter",rewriter_agent)
+builder.set_entry_point("research")
+
+builder.add_edge("research","writer")
+builder.add_edge("writer","reviewer")
+builder.add_conditional_edges(
+    "reviewer",
+    review_router,
+    {
+        "rewriter": "rewriter",
+        END: END
+    }
+)
+builder.add_edge("rewriter","reviewer")
+graph = builder.compile()
+initial_state = {
+    "user_request": "Write a blog about RAG architecture",
+    "research_content": "",
+    "blog_content": "",
+    "review": None
 }
-graph = builder.compile(
-    checkpointer=memory
-)
-res = graph.invoke(
-    {},
-    config=config
-)
-print(res)
-graph.invoke(
-    Command(resume=True),
-    config=config
-)
+# return fully shared state
+result = graph.invoke(initial_state)
+print(result["research_content"])
+print(result["blog_content"])
+print(result["review"].status)
+print(result["review"].feedback)
